@@ -15,7 +15,9 @@
 atomic_t system_freezing_cnt = ATOMIC_INIT(0);
 EXPORT_SYMBOL(system_freezing_cnt);
 
-/* indicate whether PM freezing is in effect, protected by pm_mutex */
+/* indicate whether PM freezing is in effect, protected by
+ * system_transition_mutex
+ */
 bool pm_freezing;
 bool pm_nosig_freezing;
 
@@ -42,7 +44,10 @@ bool freezing_slow_path(struct task_struct *p)
 	if (p->flags & (PF_NOFREEZE | PF_SUSPEND_TASK))
 		return false;
 
-	if (test_thread_flag(TIF_MEMDIE))
+	if (test_tsk_thread_flag(p, TIF_MEMDIE))
+		return false;
+
+	if (cgroup_freezer_killable(p) && fatal_signal_pending(p))
 		return false;
 
 	if (pm_nosig_freezing || cgroup_freezing(p))
@@ -66,7 +71,12 @@ bool __refrigerator(bool check_kthr_stop)
 	pr_debug("%s entered refrigerator\n", current->comm);
 
 	for (;;) {
-		set_current_state(TASK_UNINTERRUPTIBLE);
+		bool killable = cgroup_freezer_killable(current);
+
+		if (killable)
+			set_current_state(TASK_INTERRUPTIBLE);
+		else
+			set_current_state(TASK_UNINTERRUPTIBLE);
 
 		spin_lock_irq(&freezer_lock);
 		current->flags |= PF_FROZEN;
@@ -78,6 +88,14 @@ bool __refrigerator(bool check_kthr_stop)
 		if (!(current->flags & PF_FROZEN))
 			break;
 		was_frozen = true;
+		/*
+		 * Now we're sure that there is no pending fatal signal.
+		 * Clear TIF_SIGPENDING to not get out of schedule()
+		 * immediately (if there is a non-fatal signal pending), and
+		 * put the task into sleep.
+		 */
+		if (killable)
+			clear_thread_flag(TIF_SIGPENDING);
 		schedule();
 	}
 
