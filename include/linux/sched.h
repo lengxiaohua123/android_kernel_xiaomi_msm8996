@@ -1771,7 +1771,10 @@ struct task_struct {
 #endif
 #ifdef CONFIG_CGROUPS
 	/* disallow userland-initiated cgroup migration */
-	unsigned no_cgroup_migration:1;
+	unsigned no_cgroup_migration:1;       
+        /* task is frozen/stopped (used by the cgroup freezer) */
+	unsigned frozen:1;
+
 #endif
 
 	unsigned long atomic_flags; /* Flags needing atomic access. */
